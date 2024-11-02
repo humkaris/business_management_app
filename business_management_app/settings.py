@@ -77,7 +77,7 @@ WSGI_APPLICATION = 'business_management_app.wsgi.application'
 DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.postgresql',
-        'NAME': 'business_management_db',
+        'NAME': 'quotation_db',
         'USER': 'postgres',
         'PASSWORD': 'Mjomba2020',
         'HOST': 'localhost',
