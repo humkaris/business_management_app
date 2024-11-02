@@ -1,12 +1,21 @@
-# Ignore Python cache files
+# Virtual environment
+venv/
+
+# Django files
+*.log
+*.pot
 *.pyc
 __pycache__/
-
-# Ignore environment variables
-.env
-
-# Ignore SQLite database file
 db.sqlite3
 
-# Ignore VS Code settings
+# Environment variables and secrets
+.env
+.settings_local.py
+
+# Static and media files
+staticfiles/
+media/
+
+# VSCode project files
 .vscode/
+
