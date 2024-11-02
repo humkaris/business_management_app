@@ -1,0 +1,12 @@
+# Ignore Python cache files
+*.pyc
+__pycache__/
+
+# Ignore environment variables
+.env
+
+# Ignore SQLite database file
+db.sqlite3
+
+# Ignore VS Code settings
+.vscode/
