@@ -1,4 +1,5 @@
 from django.db import models
+from decimal import Decimal
 from django.utils import timezone
 from django.core.exceptions import ValidationError
 from django.core.validators import validate_email
@@ -41,6 +42,9 @@ class Quotation(models.Model):
         # Calculate total tax based on tax rate
         self.total_tax = (self.subtotal * self.tax_rate / 100)  # Assuming tax_rate is a percentage
         
+
+         # Set labor cost to 30% of the subtotal
+        self.labour_cost = self.subtotal * Decimal('0.30')
         # Calculate grand total
         self.grand_total = self.subtotal + self.total_tax + self.labour_cost
 

@@ -11,6 +11,7 @@ class QuotationAdmin(admin.ModelAdmin):
         'quote_number',
         'subtotal',
         'total_tax',
+        'labour_cost',
         'grand_total',
         'status',  # Display the status of the quotation
         'date_created'  # You might also want to display the creation date
@@ -18,7 +19,7 @@ class QuotationAdmin(admin.ModelAdmin):
     search_fields = ('client_name', 'client_email', 'quote_number')
     list_filter = ('status',)  # Allows filtering by status in the admin
     ordering = ('-date_created',)  # Orders the quotations by creation date, newest first
-    readonly_fields = ('quote_number', 'subtotal', 'total_tax', 'grand_total')  # Make financial fields read-only
+    readonly_fields = ('quote_number', 'subtotal', 'total_tax', "labour_cost",'grand_total')  # Make financial fields read-only
 
 @admin.register(QuotationItem)
 class QuotationItemAdmin(admin.ModelAdmin):
