@@ -2,7 +2,10 @@ import pytest
 from decimal import Decimal
 from django.core.exceptions import ValidationError
 from .models import Quotation, QuotationItem
+from management.forms import QuotationForm ,QuotationItemForm
 from unittest import mock
+from datetime import date, timedelta
+from django.utils import timezone
 from django.db import connection
 import logging
 
@@ -36,7 +39,7 @@ class TestQuotationModel:
                 client_address="123 Main St",
                 client_phone_number="555-1234",
                 tax_rate=Decimal('10.00'),
-                labour_cost=Decimal('50.00')
+                
             )
             quotation.save()  # Explicitly save the instance
 
@@ -48,7 +51,7 @@ class TestQuotationModel:
             assert quotation.client_name == "John Doe"
             assert quotation.client_email == "john@example.com"
             assert quotation.subtotal == 0  # Check subtotal after totals are calculated
-            assert quotation.grand_total == 50  # Expected to include only labour_cost as subtotal
+            assert quotation.grand_total == 0  # Expected to include only labour_cost as subtotal
         except Exception as e:
             logger.error(f"Error during test: {e}")
             raise
@@ -82,7 +85,7 @@ class TestQuotationModel:
             client_address="123 Main St",
             client_phone_number="555-1234",
             tax_rate=Decimal('10.00'),
-            labour_cost=Decimal('50.00')
+            
         )
         quotation.save()  # Save instance to persist it
 
@@ -106,7 +109,7 @@ class TestQuotationModel:
         quotation.calculate_totals()
         assert quotation.subtotal == 80  # (2*25 + 3*10)
         assert quotation.total_tax == 8   # 10% of subtotal
-        assert quotation.grand_total == 138  # subtotal + tax + labor cost
+        assert quotation.grand_total == 112  # subtotal + tax + labor cost
 
     def test_invalid_email(self):
         """Test for invalid email addresses."""
@@ -128,3 +131,102 @@ class TestQuotationModel:
                 client_phone_number="555-5678"
             )
             quotation.full_clean()  # Missing client_name should raise ValidationError
+
+# tests for form validation logic begin here
+@pytest.mark.django_db
+class TestQuotationForm: # validations for QuotationForm
+
+    def test_valid_quotation_form(self):
+        # Set up a quotation with necessary fields, excluding `labour_cost`
+        quotation = Quotation(
+            client_name="John Doe",
+            client_email="john@example.com",
+            client_address="123 Main St",
+            client_phone_number="555-1234",
+            tax_rate=Decimal('10.00'),
+            status="Draft",
+            date_created=timezone.now(),
+            valid_until=timezone.now().date() + timezone.timedelta(days=30)
+        )
+        quotation.save()
+
+        # Add items to ensure `labour_cost` and subtotal are calculated
+        QuotationItem.objects.create(
+            quotation=quotation,
+            description="Item 1",
+            quantity=2,
+            unit_price=Decimal('25.00')
+        )
+
+        quotation.calculate_totals()
+        assert quotation.labour_cost == quotation.subtotal * Decimal('0.30')
+        
+    def test_invalid_tax_rate(self):
+        form_data = {
+            'client_name': "Jane Doe",
+            'client_email': "jane@example.com",
+            'client_address': "456 Elm St",
+            'client_phone_number': "555-5678",
+            'tax_rate': Decimal('25.00'),  # Invalid tax rate
+            'valid_until': date.today() + timedelta(days=30),
+            'status': 'Draft',
+        }
+        form = QuotationForm(data=form_data)
+        assert not form.is_valid()
+        assert "tax_rate" in form.errors  # Check that tax rate error is in the form errors
+
+    
+    def test_invalid_valid_until_date(self):
+        """Test that a validation error is raised if 'valid_until' is before 'date_created'."""
+        date_created = timezone.now()
+
+        # Prepare form data with an invalid 'valid_until' date
+        form_data = {
+            'client_name': "Jane Doe",
+            'client_email': "jane@example.com",
+            'client_address': "456 Elm St",
+            'client_phone_number': "555-6789",
+            'tax_rate': Decimal('10.00'),
+            'status': 'Draft',
+            'valid_until': date_created.date() - timezone.timedelta(days=1),  # Invalid: before date_created
+            'date_created': date_created.date(),
+        }
+
+        # Use the form to validate the data
+        form = QuotationForm(data=form_data)
+        form.is_valid()  # Run validation
+
+        # Assert that the specific error is in form.errors for 'valid_until'
+        assert "The valid until date must be after the date created." in form.errors["valid_until"]
+
+
+@pytest.mark.django_db
+class TestQuotationForm: # Validation for QuotationItemForm
+    def test_valid_quotation_item_form(self):
+        form_data = {
+            'description': 'Test Item',
+            'quantity': 5,
+            'unit_price': Decimal('10.00'),
+        }
+        form = QuotationItemForm(data=form_data)
+        assert form.is_valid()  # Should pass with valid data
+
+    def test_invalid_quantity(self):
+        form_data = {
+            'description': 'Test Item',
+            'quantity': -3,  # Invalid negative quantity
+            'unit_price': Decimal('10.00'),
+        }
+        form = QuotationItemForm(data=form_data)
+        assert not form.is_valid()
+        assert "quantity" in form.errors
+
+    def test_invalid_unit_price(self):
+        form_data = {
+            'description': 'Test Item',
+            'quantity': 3,
+            'unit_price': Decimal('-5.00'),  # Invalid negative price
+        }
+        form = QuotationItemForm(data=form_data)
+        assert not form.is_valid()
+        assert "unit_price" in form.errors

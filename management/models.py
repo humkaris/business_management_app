@@ -46,7 +46,7 @@ class Quotation(models.Model):
          # Set labor cost to 30% of the subtotal
         self.labour_cost = self.subtotal * Decimal('0.30')
         # Calculate grand total
-        self.grand_total = self.subtotal + self.total_tax + self.labour_cost
+        self.grand_total = self.subtotal + Decimal(self.total_tax) + self.labour_cost
 
         
 
