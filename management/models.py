@@ -1,10 +1,13 @@
 from django.db import models
-from decimal import Decimal
+from decimal import Decimal, ROUND_HALF_UP
 from django.utils import timezone
 from django.core.exceptions import ValidationError
 from django.core.validators import validate_email
 from django.db import transaction
 import logging
+from django.db.models.signals import post_save
+from django.dispatch import receiver
+
 
 logger = logging.getLogger(__name__)
 
@@ -35,19 +38,18 @@ class Quotation(models.Model):
 
 
     def calculate_totals(self):
-        """Calculate subtotal, tax, and grand total."""
-        # Calculate subtotal as the sum of all item totals
+        """Calculate subtotal, tax, and grand total without triggering infinite recursion."""
         self.subtotal = sum(item.total_price() for item in self.items.all())
-        
-        # Calculate total tax based on tax rate
-        self.total_tax = (self.subtotal * self.tax_rate / 100)  # Assuming tax_rate is a percentage
-        
-
-         # Set labor cost to 30% of the subtotal
         self.labour_cost = self.subtotal * Decimal('0.30')
-        # Calculate grand total
-        self.grand_total = self.subtotal + Decimal(self.total_tax) + self.labour_cost
 
+        # Ensure tax_rate is Decimal for compatibility in calculations
+        tax_rate_decimal = Decimal(self.tax_rate)
+
+        # Calculate total tax based on the updated formula, rounded to 2 decimal places
+        self.total_tax = ((self.subtotal + self.labour_cost) * (tax_rate_decimal / 100)).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+
+        # Calculate the grand total
+        self.grand_total = (self.subtotal + self.labour_cost + self.total_tax).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
         
 
     def clean(self):
@@ -119,8 +121,9 @@ class QuotationItem(models.Model):
     unit_price = models.DecimalField(max_digits=10, decimal_places=2)  # Price per unit
 
     def total_price(self):
-        return self.quantity * self.unit_price  # Calculate total for this item
-
+        if self.quantity is not None and self.unit_price is not None:
+            return self.quantity * self.unit_price
+        return 0
     def save(self, *args, **kwargs):
         # Save the QuotationItem and trigger recalculation on the parent Quotation
         super().save(*args, **kwargs)
@@ -136,16 +139,125 @@ class QuotationItem(models.Model):
     def __str__(self):
         return f"{self.description} (x{self.quantity})"
 
-# additional models
 class Invoice(models.Model):
+    # Fields for Invoice model
     invoice_number = models.CharField(max_length=20, unique=True)
-    quotation = models.ForeignKey(Quotation, on_delete=models.CASCADE)
-    date_created = models.DateField(auto_now_add=True)
-    total_amount = models.DecimalField(max_digits=10, decimal_places=2)
+    quotation = models.ForeignKey(Quotation, on_delete=models.CASCADE, null=True, blank=True)
+    date_created = models.DateField(default=timezone.now)
+    due_date = models.DateField(null=True, blank=True)
+    client_name = models.CharField(max_length=100, blank=True, null=True)
+    client_email = models.EmailField(blank=True, null=True)
+    client_address = models.TextField(blank=True, null=True)
+    client_phone_number = models.CharField(max_length=15, blank=True, null=True)
+    subtotal = models.DecimalField(max_digits=10, decimal_places=2, default=0.00)
+    labour_cost = models.DecimalField(max_digits=10, decimal_places=2, default=0.00)
+    total_tax = models.DecimalField(max_digits=10, decimal_places=2, default=0.00)
+    grand_total = models.DecimalField(max_digits=10, decimal_places=2, default=0.00)
+    tax_rate = models.DecimalField(max_digits=5, decimal_places=2, default=0.00)
+    status = models.CharField(max_length=50, choices=[('Draft', 'Draft'), ('Sent', 'Sent'), ('Paid', 'Paid'), ('Overdue', 'Overdue')], default='Draft')
+    stamped_invoice = models.FileField(upload_to='scanned_invoices/', null=True, blank=True)
+
+    def calculate_totals(self):
+        """Calculate totals for invoices, including tax and grand total."""
+        
+        tax_rate_decimal = Decimal(self.tax_rate)
+        # Calculate total tax and grand total
+        subtotal_decimal = Decimal(self.subtotal) if not isinstance(self.subtotal, Decimal) else self.subtotal
+        labour_cost_decimal = Decimal(self.labour_cost) if not isinstance(self.labour_cost, Decimal) else self.labour_cost
+
+        # Calculate total tax and grand total
+        self.total_tax = ((subtotal_decimal + labour_cost_decimal) * (tax_rate_decimal / Decimal('100'))).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+        self.grand_total = (subtotal_decimal + labour_cost_decimal + self.total_tax).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+
+    def save(self, *args, **kwargs):
+        if not self.invoice_number:
+            self.invoice_number = self.generate_unique_invoice_number()
+
+        # Check if this is a new Invoice object
+        is_new_invoice = self.pk is None
+
+        if self.quotation:
+            # Populate client details and financial data from the linked quotation
+            self.client_name = self.quotation.client_name
+            self.client_email = self.quotation.client_email
+            self.client_address = self.quotation.client_address
+            self.client_phone_number = self.quotation.client_phone_number
+            self.subtotal = self.quotation.subtotal
+            self.labour_cost = self.quotation.labour_cost
+            self.total_tax = self.quotation.total_tax
+            self.grand_total = self.quotation.grand_total
+
+            # Only copy QuotationItems to InvoiceItems if this is a new Invoice
+            if is_new_invoice:
+                super().save(*args, **kwargs)  # Save the invoice first to generate an ID
+
+                # Check if any InvoiceItems are already present to prevent duplication
+                if not self.items.exists():  # Assuming related name 'items' for InvoiceItem instances
+                    for item in self.quotation.items.all():
+                        InvoiceItem.objects.create(
+                            invoice=self,
+                            description=item.description,
+                            quantity=item.quantity,
+                            unit_price=item.unit_price,
+                            total_price=item.total_price()
+                        )
+
+        else:
+            if not self.pk:  # If it's a new custom invoice (not yet saved)
+                super().save(*args, **kwargs)
+
+            # Custom invoice: Calculate subtotal from associated InvoiceItems
+            custom_subtotal = sum(item.total_price for item in self.items.all())
+            self.subtotal = custom_subtotal
+            self.labour_cost = Decimal(0.00)  # Set labour cost to zero for custom invoices
+
+            # Calculate totals only for custom invoices
+            self.calculate_totals()
+
+        super().save(*args, **kwargs)
+
+    def generate_unique_invoice_number(self):
+        """Generate a unique invoice number."""
+        current_year = timezone.now().year
+        last_invoice = Invoice.objects.filter(invoice_number__startswith=f"INV-{current_year}-").order_by('invoice_number').last()
+        if not last_invoice:
+            return f"INV-{current_year}-001"
+        last_sequence_number = int(last_invoice.invoice_number.split('-')[-1])
+        new_sequence_number = last_sequence_number + 1
+        return f"INV-{current_year}-{new_sequence_number:03d}"
 
     def __str__(self):
-        return self.invoice_number
+        return f"Invoice {self.invoice_number} for {self.client_name}"
 
+class InvoiceItem(models.Model):
+    invoice = models.ForeignKey(Invoice, on_delete=models.CASCADE, related_name='items')
+    description = models.CharField(max_length=255)
+    quantity = models.PositiveIntegerField()
+    unit_price = models.DecimalField(max_digits=10, decimal_places=2)
+    total_price = models.DecimalField(max_digits=10, decimal_places=2, default=0.00)
+
+    def save(self, *args, **kwargs):
+        # Automatically calculate total price for the item
+        self.total_price = self.quantity * self.unit_price
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return self.description
+
+@receiver(post_save, sender=InvoiceItem)
+def update_invoice_totals(sender, instance, **kwargs):
+    """Update the invoice totals after saving an InvoiceItem."""
+    invoice = instance.invoice
+    invoice.calculate_totals()
+    invoice.save()
+
+class ScannedInvoice(models.Model):
+    invoice = models.ForeignKey(Invoice, on_delete=models.CASCADE)
+    scanned_file = models.FileField(upload_to='management/templates/management/scanned_invoices/')
+    date_uploaded = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f"Scanned Invoice for {self.invoice.invoice_number}"
 class Receipt(models.Model):
     receipt_number = models.CharField(max_length=20, unique=True)
     invoice = models.ForeignKey(Invoice, on_delete=models.CASCADE)

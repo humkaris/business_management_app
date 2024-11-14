@@ -1,37 +1,26 @@
-{% extends 'base.html' %}
-
-{% block title %}Quotations List{% endblock %}
+{% extends "base.html" %}
 
 {% block content %}
-  <div class="container mt-4">
-      <h2>Quotations List</h2>
-      <table class="table">
-          <thead>
-              <tr>
-                  <th>ID</th>
-                  <th>Client Name</th>
-                  <th>Subtotal</th>
-                  <th>Labour Cost</th>
-                  <th>Status</th>
-                  <th>Actions</th>
-              </tr>
-          </thead>
-          <tbody>
-              {% for quotation in quotations %}
-              <tr>
-                  <td>{{ quotation.id }}</td>
-                  <td>{{ quotation.client_name }}</td>
-                  <td>{{ quotation.subtotal }}</td>
-                  <td>{{ quotation.labour_cost }}</td>
-                  <td>{{ quotation.status }}</td>
-                  <td><a href="{% url 'edit_quotation' quotation.id %}">Edit</a></td>
-              </tr>
-              {% empty %}
-              <tr>
-                  <td colspan="6">No quotations available.</td>
-              </tr>
-              {% endfor %}
-          </tbody>
-      </table>
-  </div>
+<h2>Quotation List</h2>
+<a href="{% url 'create_quotation' %}">Create New Quotation</a>
+
+<table>
+    <tr>
+        <th>Quote Number</th>
+        <th>Client Name</th>
+        <th>Date Created</th>
+        <th>Actions</th>
+    </tr>
+    {% for quotation in quotations %}
+    <tr>
+        <td>{{ quotation.quote_number }}</td>
+        <td>{{ quotation.client_name }}</td>
+        <td>{{ quotation.date_created }}</td>
+        <td>
+            <a href="{% url 'edit_quotation' quotation.id %}">Edit</a>
+        </td>
+    </tr>
+    {% endfor %}
+</table>
+
 {% endblock %}

@@ -1,28 +1,42 @@
-{% extends 'base.html' %}
-{% load crispy_forms_tags %}
-
-{% block title %}{{ form.instance.id|default:"Create a Quotation" }}{% endblock %}
+{% extends "base.html" %}
 
 {% block content %}
-  <h2>{% if form.instance.id %}Edit Quotation{% else %}Create a Quotation{% endif %}</h2>
-  <form method="post" novalidate>
-    {% csrf_token %}
-    {{ form|crispy }}
-    <button type="submit" class="btn btn-primary">
-      {% if form.instance.id %}Update Quotation{% else %}Save Quotation{% endif %}
-    </button>
-  </form>
+<h2>{% if form.instance.pk %}Edit Quotation{% else %}Create Quotation{% endif %}</h2>
 
-  {% if form.errors %}
-    <div class="errorlist">
-        {% for field in form %}
-            {% for error in field.errors %}
-                <p>{{ error }}</p>
-            {% endfor %}
-        {% endfor %}
-        {% for error in form.non_field_errors %}
-            <p>{{ error }}</p>
+<form method="post">
+    {% csrf_token %}
+    {{ form.as_p }}  <!-- Render QuotationForm fields -->
+
+    <h3>Items</h3>
+    <div id="items-container">
+        {{ formset.management_form }}
+        {% for form in formset %}
+            <div class="quotation-item">
+                {{ form.as_p }}
+                <button type="button" class="remove-item">Remove Item</button>
+            </div>
         {% endfor %}
     </div>
-  {% endif %}
+
+    <button type="button" id="add-item">Add Item</button>
+    <button type="submit">Save Quotation</button>
+</form>
+
+<script>
+// JavaScript for adding/removing items
+document.getElementById('add-item').onclick = function() {
+    let newForm = document.createElement('div');
+    newForm.innerHTML = `
+        {{ formset.empty_form.as_p|safe }}
+        <button type="button" class="remove-item">Remove Item</button>`;
+    document.getElementById('items-container').appendChild(newForm);
+};
+
+document.getElementById('items-container').addEventListener('click', function(e) {
+    if (e.target.classList.contains('remove-item')) {
+        e.target.closest('.quotation-item').remove();
+    }
+});
+</script>
+
 {% endblock %}

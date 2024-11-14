@@ -1,13 +1,15 @@
 import pytest
 from decimal import Decimal
 from django.core.exceptions import ValidationError
-from .models import Quotation, QuotationItem
-from management.forms import QuotationForm ,QuotationItemForm
+from .models import Quotation, QuotationItem, Invoice, InvoiceItem
+from management.forms import QuotationForm ,QuotationItemForm, InvoiceForm, InvoiceItemForm
 from unittest import mock
 from datetime import date, timedelta
 from django.utils import timezone
 from django.db import connection
 import logging
+from django.urls import reverse
+from django.test import Client
 
 logger = logging.getLogger(__name__)
 
@@ -79,6 +81,7 @@ class TestQuotationModel:
 
     def test_quotation_totals_calculation(self):
         """Test total calculations for a Quotation."""
+        
         quotation = Quotation(
             client_name="John Doe",
             client_email="john@example.com",
@@ -107,9 +110,12 @@ class TestQuotationModel:
 
         # Recalculate totals
         quotation.calculate_totals()
-        assert quotation.subtotal == 80  # (2*25 + 3*10)
-        assert quotation.total_tax == 8   # 10% of subtotal
-        assert quotation.grand_total == 112  # subtotal + tax + labor cost
+        assert quotation.subtotal == Decimal(80.00)  # (2*25 + 3*10)
+        expected_total_tax = Decimal('10.40').quantize(Decimal('0.01'))
+        assert quotation.total_tax == expected_total_tax
+        expected_grand_total = Decimal('114.40').quantize(Decimal('0.01'))
+        assert quotation.grand_total == expected_grand_total
+        
 
     def test_invalid_email(self):
         """Test for invalid email addresses."""
@@ -230,3 +236,263 @@ class TestQuotationForm: # Validation for QuotationItemForm
         form = QuotationItemForm(data=form_data)
         assert not form.is_valid()
         assert "unit_price" in form.errors
+    
+    # we include grandtotal validation in this class
+
+    def test_grand_total_validation(self):
+        """Test grand_total calculation and validation with added QuotationItems."""
+        
+        # Set up a subtotal (implicitly 0 without items)
+        date_created = timezone.now()
+        valid_until = date_created.date() + timezone.timedelta(days=30)
+        
+        # Create a Quotation instance
+        quotation = Quotation(
+            client_name="John Doe",
+            client_email="john@example.com",
+            client_address="123 Main St",
+            client_phone_number="555-1234",
+            tax_rate=Decimal('10.00'),
+            date_created=date_created,
+            valid_until=valid_until
+        )
+        quotation.save()
+
+        # Add items to the quotation
+        QuotationItem.objects.create(
+            quotation=quotation,
+            description="Product 1",
+            quantity=2,
+            unit_price=Decimal('50.00')
+        )
+        QuotationItem.objects.create(
+            quotation=quotation,
+            description="Product 2",
+            quantity=3,
+            unit_price=Decimal('30.00')
+        )
+
+        # Recalculate totals after adding items
+        quotation.calculate_totals()
+        
+        # Expected calculations
+        expected_subtotal = Decimal('50.00') * 2 + Decimal('30.00') * 3  # = 190.00
+        expected_labour_cost = expected_subtotal * Decimal('0.30')        # = 57.00
+        expected_total_tax = (expected_subtotal + expected_labour_cost) * Decimal('0.10')  # = 24.70
+        expected_grand_total = expected_subtotal + expected_labour_cost + expected_total_tax  # = 271.70
+
+        # Assertions
+        assert quotation.subtotal == expected_subtotal
+        assert quotation.labour_cost == expected_labour_cost
+        assert quotation.total_tax == expected_total_tax
+        assert quotation.grand_total == expected_grand_total
+
+
+@pytest.mark.django_db
+class TestQuotationViews:
+
+    def setup_method(self):
+        self.client = Client()
+
+    def test_quotation_list_view(self):
+        """Test that the quotation list view renders correctly."""
+        url = reverse('quotation_list')
+        response = self.client.get(url)
+        assert response.status_code == 200
+        assert 'quotations' in response.context  # Context contains quotations
+
+
+# Invoicing module tests begin here
+
+@pytest.mark.django_db
+class TestInvoiceModel:
+
+    def test_invoice_creation_from_quotation(self):
+       
+        """Test that an Invoice is correctly created from a Quotation, with all totals matching."""
+
+        # Create and save the quotation instance
+        quotation = Quotation(
+            client_name="John Doe",
+            client_email="john@example.com",
+            client_address="123 Main St",
+            client_phone_number="555-1234",
+            tax_rate=Decimal('10.00'),
+        )
+        quotation.save()
+
+        # Create and add items to the quotation
+        item1 = QuotationItem(quotation=quotation, description="Product 1", quantity=2, unit_price=Decimal('25.00'))
+        item1.save()
+
+        item2 = QuotationItem(quotation=quotation, description="Product 2", quantity=3, unit_price=Decimal('10.00'))
+        item2.save()
+
+        # Calculate and persist totals in the quotation
+        quotation.calculate_totals()
+        quotation.save()
+        
+        # Refresh to get the latest values from the database
+        quotation.refresh_from_db()
+
+        # Create the invoice from the quotation
+        invoice = Invoice(quotation=quotation)
+        invoice.save()
+
+        # Refresh the invoice from the database
+        invoice.refresh_from_db()
+
+        # Assertions to verify totals are accurately copied
+        assert invoice.client_name == quotation.client_name
+        assert invoice.client_email == quotation.client_email
+        assert invoice.client_address == quotation.client_address
+        assert invoice.subtotal == quotation.subtotal
+        assert invoice.grand_total == quotation.grand_total
+
+
+    def test_invoice_custom_items(self):
+        """Test Invoice creation with custom items."""
+        # Create invoice instance without saving yet
+        invoice = Invoice(
+            client_name="Custom Client",
+            client_email="custom@example.com",
+            client_address="456 Another St",
+            client_phone_number="555-5678",
+            tax_rate=Decimal('15.00')
+        )
+        invoice.save()  # Save the invoice to generate a unique ID
+
+        # Create custom invoice item
+        InvoiceItem.objects.create(
+            invoice=invoice,
+            description="Custom Service",
+            quantity=1,
+            unit_price=Decimal('150.00')
+        )
+
+        # Calculate totals and check the grand total
+        invoice.calculate_totals()
+        expected_grand_total = Decimal('150.00') * Decimal('1.15')  # Includes 15% tax
+        assert invoice.grand_total == expected_grand_total
+
+    def test_invoice_totals_calculation(self):
+        """Test that Invoice totals are calculated correctly."""
+        # Create invoice instance without saving yet
+        invoice = Invoice(
+            client_name="Client X",
+            client_email="clientx@example.com",
+            tax_rate=Decimal('10.00')
+        )
+        invoice.save()  # Save the invoice to generate a unique ID
+        
+        # Create invoice items
+        InvoiceItem.objects.create(
+            invoice=invoice,
+            description="Item 1",
+            quantity=3,
+            unit_price=Decimal('50.00')
+        )
+        InvoiceItem.objects.create(
+            invoice=invoice,
+            description="Item 2",
+            quantity=4,
+            unit_price=Decimal('20.00')
+        )
+
+        # Calculate totals and check the values
+        invoice.calculate_totals()
+        expected_subtotal = Decimal('150.00') + Decimal('80.00')
+        expected_grand_total = expected_subtotal * Decimal('1.10')
+        
+        assert invoice.subtotal == expected_subtotal
+        assert invoice.grand_total == expected_grand_total
+
+
+@pytest.mark.django_db
+class TestInvoiceForm:
+
+    def test_valid_invoice_form(self):
+        """Test form validation with valid data."""
+        form_data = {
+            'client_name': "Valid Client",
+            'client_email': "valid@example.com",
+            'client_address': "123 Main St",
+            'client_phone_number': "555-1234",
+            'tax_rate': Decimal('5.00'),
+            'date_created': date.today(),
+            'due_date': date.today() + timedelta(days=30),
+            'status': 'Draft'
+        }
+        form = InvoiceForm(data=form_data)
+        print(form.errors)
+        assert form.is_valid()
+
+    def test_invalid_due_date(self):
+        """Test that a ValidationError is raised if 'due_date' is before 'date_created'."""
+        form_data = {
+            'client_name': "Jane Doe",
+            'client_email': "jane@example.com",
+            'tax_rate': Decimal('10.00'),
+            'date_created': date.today(),
+            'due_date': date.today() - timedelta(days=5),  # Invalid due_date before date_created
+        }
+        form = InvoiceForm(data=form_data)
+        assert not form.is_valid()
+        assert "due_date" in form.errors
+
+    def test_invalid_tax_rate(self):
+        """Test that the form validates the tax rate correctly."""
+        form_data = {
+            'client_name': "Tax Test Client",
+            'client_email': "tax@test.com",
+            'tax_rate': Decimal('200.00')  # Invalid tax rate exceeding 100%
+        }
+        form = InvoiceForm(data=form_data)
+        assert not form.is_valid()
+        assert "tax_rate" in form.errors
+
+
+@pytest.mark.django_db
+class TestInvoiceViews:
+
+    def setup_method(self):
+        self.client = Client()
+
+    def test_invoice_list_view(self):
+        """Test that the invoice list view renders correctly."""
+        url = reverse('invoice_list')
+        response = self.client.get(url)
+        assert response.status_code == 200
+        assert 'invoices' in response.context  # Context contains invoices
+
+    def test_invoice_creation_view(self):
+        """Test that the invoice creation view works as expected."""
+        url = reverse('invoice_create')
+        response = self.client.get(url)
+        assert response.status_code == 200
+        assert 'form' in response.context  # Context should include a form instance
+
+    def test_invoice_detail_view(self):
+        """Test viewing an individual Invoice's details."""
+        # Set up a sample Invoice
+        invoice = Invoice(
+            client_name="Detail Test Client",
+            client_email="detail@example.com",
+            tax_rate=Decimal('8.00')
+        )
+        invoice.save()
+
+        # Add items to the Invoice
+        InvoiceItem.objects.create(
+            invoice=invoice,
+            description="Test Service",
+            quantity=1,
+            unit_price=Decimal('100.00')
+        )
+        
+        # Fetch the detail view
+        url = reverse('invoice_detail', args=[invoice.id])
+        response = self.client.get(url)
+        
+        assert response.status_code == 200
+        assert 'invoice' in response.context  # Context contains the invoice instance
