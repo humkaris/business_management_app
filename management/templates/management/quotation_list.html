@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+
+{% block content %}
+<h2>Quotation List</h2>
+<a href="{% url 'create_quotation' %}">Create New Quotation</a>
+
+<table>
+    <tr>
+        <th>Quote Number</th>
+        <th>Client Name</th>
+        <th>Date Created</th>
+        <th>Actions</th>
+    </tr>
+    {% for quotation in quotations %}
+    <tr>
+        <td>{{ quotation.quote_number }}</td>
+        <td>{{ quotation.client_name }}</td>
+        <td>{{ quotation.date_created }}</td>
+        <td>
+            <a href="{% url 'edit_quotation' quotation.id %}">Edit</a>
+        </td>
+    </tr>
+    {% endfor %}
+</table>
+
+{% endblock %}

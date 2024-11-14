@@ -1,0 +1,160 @@
+[1mdiff --git a/management/forms.py b/management/forms.py[m
+[1mindex 7f4ccfa..df49f44 100644[m
+[1m--- a/management/forms.py[m
+[1m+++ b/management/forms.py[m
+[36m@@ -32,6 +32,10 @@[m [mclass QuotationForm(forms.ModelForm):[m
+         date_created = cleaned_data.get("date_created") or timezone.now()[m
+         valid_until = cleaned_data.get("valid_until")[m
+ [m
+[32m+[m[32m        subtotal = self.instance.subtotal  # since subtotal is calculated in the model[m
+[32m+[m[32m        labour_cost = cleaned_data.get('labour_cost')[m
+[32m+[m[32m        grand_total = cleaned_data.get('grand_total')[m
+[32m+[m
+         # Tax rate validation[m
+         if tax_rate is not None:[m
+             if tax_rate < Decimal('0.00') or tax_rate > Decimal('20.00'):[m
+[36m@@ -42,6 +46,19 @@[m [mclass QuotationForm(forms.ModelForm):[m
+         if valid_until and date_created:[m
+             if valid_until <= date_created.date():[m
+                 raise ValidationError({"valid_until": "The valid until date must be after the date created."})[m
+[32m+[m[41m        [m
+[32m+[m[32m        # Labour cost validation[m
+[32m+[m[32m        expected_labour_cost = Decimal(subtotal) * Decimal('0.30')[m
+[32m+[m[32m        if labour_cost != expected_labour_cost:[m
+[32m+[m[32m            raise ValidationError({[m
+[32m+[m[32m                'labour_cost': 'Labor cost must be exactly 30% of the subtotal.'[m
+[32m+[m[32m            })[m
+[32m+[m[41m        [m
+[32m+[m[32m        # Ensure grand_total is greater than subtotal[m
+[32m+[m[32m        if grand_total and grand_total <= subtotal:[m
+[32m+[m[32m            raise ValidationError({[m
+[32m+[m[32m                'grand_total': 'Grand total must be greater than the subtotal.'[m
+[32m+[m[32m            })[m
+        [m
+         return cleaned_data[m
+ [m
+[1mdiff --git a/management/models.py b/management/models.py[m
+[1mindex c72a540..4ad7247 100644[m
+[1m--- a/management/models.py[m
+[1m+++ b/management/models.py[m
+[36m@@ -1,5 +1,5 @@[m
+ from django.db import models[m
+[31m-from decimal import Decimal[m
+[32m+[m[32mfrom decimal import Decimal, ROUND_HALF_UP[m
+ from django.utils import timezone[m
+ from django.core.exceptions import ValidationError[m
+ from django.core.validators import validate_email[m
+[36m@@ -35,19 +35,18 @@[m [mclass Quotation(models.Model):[m
+ [m
+ [m
+     def calculate_totals(self):[m
+[31m-        """Calculate subtotal, tax, and grand total."""[m
+[31m-        # Calculate subtotal as the sum of all item totals[m
+[32m+[m[32m        """Calculate subtotal, tax, and grand total without triggering infinite recursion."""[m
+         self.subtotal = sum(item.total_price() for item in self.items.all())[m
+[31m-        [m
+[31m-        # Calculate total tax based on tax rate[m
+[31m-        self.total_tax = (self.subtotal * self.tax_rate / 100)  # Assuming tax_rate is a percentage[m
+[31m-        [m
+[31m-[m
+[31m-         # Set labor cost to 30% of the subtotal[m
+         self.labour_cost = self.subtotal * Decimal('0.30')[m
+[31m-        # Calculate grand total[m
+[31m-        self.grand_total = self.subtotal + Decimal(self.total_tax) + self.labour_cost[m
+ [m
+[32m+[m[32m        # Ensure tax_rate is Decimal for compatibility in calculations[m
+[32m+[m[32m        tax_rate_decimal = Decimal(self.tax_rate)[m
+[32m+[m
+[32m+[m[32m        # Calculate total tax based on the updated formula, rounded to 2 decimal places[m
+[32m+[m[32m        self.total_tax = ((self.subtotal + self.labour_cost) * (tax_rate_decimal / 100)).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)[m
+[32m+[m
+[32m+[m[32m        # Calculate the grand total[m
+[32m+[m[32m        self.grand_total = (self.subtotal + self.labour_cost + self.total_tax).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)[m
+         [m
+ [m
+     def clean(self):[m
+[1mdiff --git a/management/tests.py b/management/tests.py[m
+[1mindex 63bde82..9b7cbc2 100644[m
+[1m--- a/management/tests.py[m
+[1m+++ b/management/tests.py[m
+[36m@@ -79,6 +79,7 @@[m [mclass TestQuotationModel:[m
+ [m
+     def test_quotation_totals_calculation(self):[m
+         """Test total calculations for a Quotation."""[m
+[32m+[m[41m        [m
+         quotation = Quotation([m
+             client_name="John Doe",[m
+             client_email="john@example.com",[m
+[36m@@ -107,9 +108,12 @@[m [mclass TestQuotationModel:[m
+ [m
+         # Recalculate totals[m
+         quotation.calculate_totals()[m
+[31m-        assert quotation.subtotal == 80  # (2*25 + 3*10)[m
+[31m-        assert quotation.total_tax == 8   # 10% of subtotal[m
+[31m-        assert quotation.grand_total == 112  # subtotal + tax + labor cost[m
+[32m+[m[32m        assert quotation.subtotal == Decimal(80.00)  # (2*25 + 3*10)[m
+[32m+[m[32m        expected_total_tax = Decimal('10.40').quantize(Decimal('0.01'))[m
+[32m+[m[32m        assert quotation.total_tax == expected_total_tax[m
+[32m+[m[32m        expected_grand_total = Decimal('114.40').quantize(Decimal('0.01'))[m
+[32m+[m[32m        assert quotation.grand_total == expected_grand_total[m
+[32m+[m[41m        [m
+ [m
+     def test_invalid_email(self):[m
+         """Test for invalid email addresses."""[m
+[36m@@ -229,4 +233,54 @@[m [mclass TestQuotationForm: # Validation for QuotationItemForm[m
+         }[m
+         form = QuotationItemForm(data=form_data)[m
+         assert not form.is_valid()[m
+[31m-        assert "unit_price" in form.errors[m
+\ No newline at end of file[m
+[32m+[m[32m        assert "unit_price" in form.errors[m
+[32m+[m[41m    [m
+[32m+[m[32m    # we include grandtotal validation in this class[m
+[32m+[m
+[32m+[m[32m    def test_grand_total_validation(self):[m
+[32m+[m[32m        """Test grand_total calculation and validation with added QuotationItems."""[m
+[32m+[m[41m        [m
+[32m+[m[32m        # Set up a subtotal (implicitly 0 without items)[m
+[32m+[m[32m        date_created = timezone.now()[m
+[32m+[m[32m        valid_until = date_created.date() + timezone.timedelta(days=30)[m
+[32m+[m[41m        [m
+[32m+[m[32m        # Create a Quotation instance[m
+[32m+[m[32m        quotation = Quotation([m
+[32m+[m[32m            client_name="John Doe",[m
+[32m+[m[32m            client_email="john@example.com",[m
+[32m+[m[32m            client_address="123 Main St",[m
+[32m+[m[32m            client_phone_number="555-1234",[m
+[32m+[m[32m            tax_rate=Decimal('10.00'),[m
+[32m+[m[32m            date_created=date_created,[m
+[32m+[m[32m            valid_until=valid_until[m
+[32m+[m[32m        )[m
+[32m+[m[32m        quotation.save()[m
+[32m+[m
+[32m+[m[32m        # Add items to the quotation[m
+[32m+[m[32m        QuotationItem.objects.create([m
+[32m+[m[32m            quotation=quotation,[m
+[32m+[m[32m            description="Product 1",[m
+[32m+[m[32m            quantity=2,[m
+[32m+[m[32m            unit_price=Decimal('50.00')[m
+[32m+[m[32m        )[m
+[32m+[m[32m        QuotationItem.objects.create([m
+[32m+[m[32m            quotation=quotation,[m
+[32m+[m[32m            description="Product 2",[m
+[32m+[m[32m            quantity=3,[m
+[32m+[m[32m            unit_price=Decimal('30.00')[m
+[32m+[m[32m        )[m
+[32m+[m
+[32m+[m[32m        # Recalculate totals after adding items[m
+[32m+[m[32m        quotation.calculate_totals()[m
+[32m+[m[41m        [m
+[32m+[m[32m        # Expected calculations[m
+[32m+[m[32m        expected_subtotal = Decimal('50.00') * 2 + Decimal('30.00') * 3  # = 190.00[m
+[32m+[m[32m        expected_labour_cost = expected_subtotal * Decimal('0.30')        # = 57.00[m
+[32m+[m[32m        expected_total_tax = (expected_subtotal + expected_labour_cost) * Decimal('0.10')  # = 24.70[m
+[32m+[m[32m        expected_grand_total = expected_subtotal + expected_labour_cost + expected_total_tax  # = 271.70[m
+[32m+[m
+[32m+[m[32m        # Assertions[m
+[32m+[m[32m        assert quotation.subtotal == expected_subtotal[m
+[32m+[m[32m        assert quotation.labour_cost == expected_labour_cost[m
+[32m+[m[32m        assert quotation.total_tax == expected_total_tax[m
+[32m+[m[32m        assert quotation.grand_total == expected_grand_total[m

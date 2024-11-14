@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+
+{% block content %}
+<h2>{% if form.instance.pk %}Edit Quotation{% else %}Create Quotation{% endif %}</h2>
+
+<form method="post">
+    {% csrf_token %}
+    {{ form.as_p }}  <!-- Render QuotationForm fields -->
+
+    <h3>Items</h3>
+    <div id="items-container">
+        {{ formset.management_form }}
+        {% for form in formset %}
+            <div class="quotation-item">
+                {{ form.as_p }}
+                <button type="button" class="remove-item">Remove Item</button>
+            </div>
+        {% endfor %}
+    </div>
+
+    <button type="button" id="add-item">Add Item</button>
+    <button type="submit">Save Quotation</button>
+</form>
+
+<script>
+// JavaScript for adding/removing items
+document.getElementById('add-item').onclick = function() {
+    let newForm = document.createElement('div');
+    newForm.innerHTML = `
+        {{ formset.empty_form.as_p|safe }}
+        <button type="button" class="remove-item">Remove Item</button>`;
+    document.getElementById('items-container').appendChild(newForm);
+};
+
+document.getElementById('items-container').addEventListener('click', function(e) {
+    if (e.target.classList.contains('remove-item')) {
+        e.target.closest('.quotation-item').remove();
+    }
+});
+</script>
+
+{% endblock %}
