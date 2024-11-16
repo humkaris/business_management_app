@@ -258,6 +258,36 @@ class ScannedInvoice(models.Model):
 
     def __str__(self):
         return f"Scanned Invoice for {self.invoice.invoice_number}"
+
+
+# this model class is for both invoice and quotation
+class Footnote(models.Model):
+    quotation_text = models.TextField(
+        default="Above information is not an invoice and only an estimate of services/goods described above. "
+                "Payment will be collected in prior to provision of services/goods described in this quote. "
+                "Please confirm your acceptance of this quote by signing this document.\n\n"
+                "Signature               Print Name                                      Date\n\n"
+                "Thank you for your business!\n"
+                "Should you have any enquiries concerning this quote, please contact:\n"
+                "Ken 0731 011 954 | Humphrey 0715 679 643"
+    )
+    invoice_text = models.TextField(
+        default="PAYMENT DETAILS:\n"
+                "PAYBILL: 522522\n"
+                "ACCOUNT: 5808345\n"
+                "----------------------------------\n"
+                "KCB BANK\n"
+                "ACCOUNT: 1295384434\n\n"
+                "Please confirm your Receipt of this Invoice by signing this document.\n\n"
+                "Signature               Print Name                                      Date\n\n"
+                "Thank you for your business!\n"
+                "Should you have any enquiries concerning this Invoice, please contact:\n"
+                "Ken 0707 475 681 | Humphrey 0715 679 643"
+    )
+
+    def __str__(self):
+        return "Footnotes for Quotations and Invoices"
+        
 class Receipt(models.Model):
     receipt_number = models.CharField(max_length=20, unique=True)
     invoice = models.ForeignKey(Invoice, on_delete=models.CASCADE)

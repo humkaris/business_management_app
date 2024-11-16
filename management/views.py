@@ -4,7 +4,7 @@ from django.urls import reverse_lazy
 from django.db.models import Q
 from django.views.generic import CreateView, UpdateView, DetailView, DeleteView, ListView
 from .forms import QuotationForm, QuotationItemFormSet, InvoiceForm, InvoiceItemFormSet
-from .models import Quotation, QuotationItem, Invoice, InvoiceItem
+from .models import Quotation, QuotationItem, Invoice, InvoiceItem, Footnote
 
 def create_quotation(request, quotation_id=None):
     if quotation_id:
@@ -34,6 +34,11 @@ def create_quotation(request, quotation_id=None):
 
             messages.success(request, 'Quotation saved successfully!')
             return redirect('quotation_list')
+
+    footnote = Footnote.objects.first()  # Assuming a single footnote instance
+    context = {
+        'quotation_footnote': footnote.quotation_text if footnote else None,
+    }
 
     return render(request, 'management/quotation_form.html', {
         'form': quotation_form,
@@ -81,6 +86,10 @@ class InvoiceCreateView(CreateView):
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
+        
+        footnote = Footnote.objects.first()
+        context['invoice_footnote'] = footnote.invoice_text if footnote else ""
+
         if self.request.POST:
             context['formset'] = InvoiceItemFormSet(self.request.POST)
         else:

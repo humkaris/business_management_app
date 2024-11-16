@@ -1,5 +1,5 @@
 from django.contrib import admin
-from .models import Quotation, QuotationItem, Invoice, InvoiceItem, ScannedInvoice
+from .models import Quotation, QuotationItem, Invoice, InvoiceItem, ScannedInvoice, Footnote
 
 class QuotationItemInline(admin.TabularInline):
     model = QuotationItem
@@ -94,3 +94,5 @@ class ScannedInvoiceAdmin(admin.ModelAdmin):
     search_fields = ['invoice__invoice_number']  # Optional: Allows searching by invoice number
 
 admin.site.register(ScannedInvoice, ScannedInvoiceAdmin)
+
+admin.site.register(Footnote)
