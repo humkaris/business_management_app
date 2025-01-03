@@ -1,5 +1,7 @@
 from django.contrib import admin
-from .models import Quotation, QuotationItem, Invoice, InvoiceItem, ScannedInvoice
+from .models import (Quotation, QuotationItem, Invoice, 
+                     InvoiceItem, ScannedInvoice, Footnote,
+                     Receipt)
 
 class QuotationItemInline(admin.TabularInline):
     model = QuotationItem
@@ -43,6 +45,12 @@ class InvoiceItemInline(admin.TabularInline):
     fields = ('description', 'quantity', 'unit_price', 'total_price')
     readonly_fields = ('total_price',)
     can_delete = True
+
+class ReceiptInline(admin.TabularInline):
+    model = Receipt
+    extra = 0
+    fields = ('receipt_number', 'payment_date', 'amount_paid', 'payment_method', 'notes')
+    readonly_fields = ('receipt_number',)
 @admin.register(Invoice)
 class InvoiceAdmin(admin.ModelAdmin):
     list_display = (
@@ -55,13 +63,14 @@ class InvoiceAdmin(admin.ModelAdmin):
         'date_created', 
         'due_date', 
         'total_tax',
-        'grand_total'
+        'grand_total',
+        'get_balance',
     )
     search_fields = ('invoice_number', 'client_name')
     list_filter = ('status',)
     ordering = ('-date_created',)
-    readonly_fields = ('invoice_number', 'total_tax', 'grand_total', 'labour_cost')  # Display tax and grand total
-    inlines = [InvoiceItemInline]
+    readonly_fields = ('invoice_number', 'total_tax', 'grand_total', 'labour_cost', 'get_balance')  # Display tax and grand total
+    inlines = [InvoiceItemInline, ReceiptInline]
 
     def save_model(self, request, obj, form, change):
         # Automatically pull billing details from the quotation if linked
@@ -89,8 +98,26 @@ class InvoiceAdmin(admin.ModelAdmin):
             # Hide 'labour_cost' if there is no quotation
             return readonly_fields + ('labour_cost',)
         return readonly_fields
+
+@admin.register(Receipt)
+class ReceiptAdmin(admin.ModelAdmin):
+    list_display = (
+        'receipt_number',
+        'invoice',
+        'payment_date',
+        'amount_paid',
+        'payment_method',
+        
+        
+    )
+    search_fields = ('receipt_number', 'invoice__invoice_number')
+    list_filter = ('payment_method', 'payment_date')
+    readonly_fields = ('receipt_number',)
+    ordering = ('-payment_date',)
 class ScannedInvoiceAdmin(admin.ModelAdmin):
     list_display = ['invoice', 'scanned_file', 'date_uploaded']
     search_fields = ['invoice__invoice_number']  # Optional: Allows searching by invoice number
 
 admin.site.register(ScannedInvoice, ScannedInvoiceAdmin)
+
+admin.site.register(Footnote)

@@ -5,7 +5,7 @@ from django.core.exceptions import ValidationError
 from django.core.validators import validate_email
 from django.db import transaction
 import logging
-from django.db.models.signals import post_save
+from django.db.models.signals import post_save, pre_save
 from django.dispatch import receiver
 
 
@@ -142,7 +142,7 @@ class QuotationItem(models.Model):
 class Invoice(models.Model):
     # Fields for Invoice model
     invoice_number = models.CharField(max_length=20, unique=True)
-    quotation = models.ForeignKey(Quotation, on_delete=models.CASCADE, null=True, blank=True)
+    quotation = models.ForeignKey('Quotation', on_delete=models.CASCADE, null=True, blank=True)
     date_created = models.DateField(default=timezone.now)
     due_date = models.DateField(null=True, blank=True)
     client_name = models.CharField(max_length=100, blank=True, null=True)
@@ -154,80 +154,107 @@ class Invoice(models.Model):
     total_tax = models.DecimalField(max_digits=10, decimal_places=2, default=0.00)
     grand_total = models.DecimalField(max_digits=10, decimal_places=2, default=0.00)
     tax_rate = models.DecimalField(max_digits=5, decimal_places=2, default=0.00)
-    status = models.CharField(max_length=50, choices=[('Draft', 'Draft'), ('Sent', 'Sent'), ('Paid', 'Paid'), ('Overdue', 'Overdue')], default='Draft')
+    status = models.CharField(
+        max_length=50,
+        choices=[
+            ('Draft', 'Draft'),
+            ('Sent', 'Sent'),
+            ('Paid', 'Paid'),
+            ('Overdue', 'Overdue'),
+            ('Unpaid', 'Unpaid'),
+            ('Partially Paid', 'Partially Paid'),
+        ],
+        default='Draft'
+    )
     stamped_invoice = models.FileField(upload_to='scanned_invoices/', null=True, blank=True)
+
+    def calculate_outstanding_balance(self):
+        """Calculate the outstanding balance of the invoice."""
+        total_paid = sum(receipt.amount_paid for receipt in self.receipts.all())
+        return Decimal(self.grand_total) - Decimal(total_paid)
+
+    def update_payment_status(self, save_instance=False):
+        """Update the payment status of the invoice."""
+        outstanding_balance = self.calculate_outstanding_balance()
+        new_status = (
+            'Paid' if outstanding_balance <= 0 else
+            'Partially Paid' if outstanding_balance < self.grand_total else
+            'Unpaid'
+        )
+        if self.status != new_status:
+            self.status = new_status
+            if save_instance:
+                super().save(update_fields=['status'])
+    
+    def get_balance(self):
+        """Calculate the balance for the invoice."""
+        outstanding_balance = self.calculate_outstanding_balance()
+        
+        if outstanding_balance == self.grand_total:
+            return "UNPAID"
+        elif outstanding_balance <= 0:
+            return "CLEARED"
+        else:
+            return outstanding_balance
 
     def calculate_totals(self):
         """Calculate totals for invoices, including tax and grand total."""
+        subtotal = Decimal(self.subtotal)
+        labour_cost = Decimal(self.labour_cost)
+        tax_rate = Decimal(self.tax_rate) / 100
+        self.total_tax = (subtotal + labour_cost) * tax_rate
+        self.grand_total = subtotal + labour_cost + self.total_tax
         
-        tax_rate_decimal = Decimal(self.tax_rate)
-        # Calculate total tax and grand total
-        subtotal_decimal = Decimal(self.subtotal) if not isinstance(self.subtotal, Decimal) else self.subtotal
-        labour_cost_decimal = Decimal(self.labour_cost) if not isinstance(self.labour_cost, Decimal) else self.labour_cost
-
-        # Calculate total tax and grand total
-        self.total_tax = ((subtotal_decimal + labour_cost_decimal) * (tax_rate_decimal / Decimal('100'))).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
-        self.grand_total = (subtotal_decimal + labour_cost_decimal + self.total_tax).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
 
     def save(self, *args, **kwargs):
-        if not self.invoice_number:
-            self.invoice_number = self.generate_unique_invoice_number()
-
-        # Check if this is a new Invoice object
         is_new_invoice = self.pk is None
 
+        if not self.invoice_number:
+            self.invoice_number = self.generate_unique_invoice_number()
+        
+        if is_new_invoice:
+            super().save(*args, **kwargs)
+
         if self.quotation:
-            # Populate client details and financial data from the linked quotation
-            self.client_name = self.quotation.client_name
-            self.client_email = self.quotation.client_email
-            self.client_address = self.quotation.client_address
-            self.client_phone_number = self.quotation.client_phone_number
-            self.subtotal = self.quotation.subtotal
-            self.labour_cost = self.quotation.labour_cost
-            self.total_tax = self.quotation.total_tax
-            self.grand_total = self.quotation.grand_total
-
-            # Only copy QuotationItems to InvoiceItems if this is a new Invoice
-            if is_new_invoice:
-                super().save(*args, **kwargs)  # Save the invoice first to generate an ID
-
-                # Check if any InvoiceItems are already present to prevent duplication
-                if not self.items.exists():  # Assuming related name 'items' for InvoiceItem instances
-                    for item in self.quotation.items.all():
-                        InvoiceItem.objects.create(
-                            invoice=self,
-                            description=item.description,
-                            quantity=item.quantity,
-                            unit_price=item.unit_price,
-                            total_price=item.total_price()
-                        )
-
+            self._populate_from_quotation(is_new_invoice)
         else:
-            if not self.pk:  # If it's a new custom invoice (not yet saved)
-                super().save(*args, **kwargs)
-
-            # Custom invoice: Calculate subtotal from associated InvoiceItems
-            custom_subtotal = sum(item.total_price for item in self.items.all())
-            self.subtotal = custom_subtotal
-            self.labour_cost = Decimal(0.00)  # Set labour cost to zero for custom invoices
-
-            # Calculate totals only for custom invoices
             self.calculate_totals()
 
         super().save(*args, **kwargs)
+        self.update_payment_status(save_instance=True)
+
+    def _populate_from_quotation(self, is_new_invoice):
+        """Populate invoice fields from the linked quotation."""
+        self.client_name = self.quotation.client_name
+        self.client_email = self.quotation.client_email
+        self.client_address = self.quotation.client_address
+        self.client_phone_number = self.quotation.client_phone_number
+        self.subtotal = self.quotation.subtotal
+        self.labour_cost = self.quotation.labour_cost
+        self.total_tax = self.quotation.total_tax
+        self.grand_total = self.quotation.grand_total
+
+        if is_new_invoice and not self.items.exists():
+            super().save()  # Save to get an ID for the invoice
+            for item in self.quotation.items.all():
+                InvoiceItem.objects.create(
+                    invoice=self,
+                    description=item.description,
+                    quantity=item.quantity,
+                    unit_price=item.unit_price,
+                    total_price=item.total_price
+                )
 
     def generate_unique_invoice_number(self):
         """Generate a unique invoice number."""
         current_year = timezone.now().year
-        last_invoice = Invoice.objects.filter(invoice_number__startswith=f"INV-{current_year}-").order_by('invoice_number').last()
-        if not last_invoice:
-            return f"INV-{current_year}-001"
-        last_sequence_number = int(last_invoice.invoice_number.split('-')[-1])
-        new_sequence_number = last_sequence_number + 1
+        last_invoice = Invoice.objects.filter(invoice_number__startswith=f"INV-{current_year}-").last()
+        new_sequence_number = 1 if not last_invoice else int(last_invoice.invoice_number.split('-')[-1]) + 1
         return f"INV-{current_year}-{new_sequence_number:03d}"
 
     def __str__(self):
         return f"Invoice {self.invoice_number} for {self.client_name}"
+
 
 class InvoiceItem(models.Model):
     invoice = models.ForeignKey(Invoice, on_delete=models.CASCADE, related_name='items')
@@ -237,12 +264,12 @@ class InvoiceItem(models.Model):
     total_price = models.DecimalField(max_digits=10, decimal_places=2, default=0.00)
 
     def save(self, *args, **kwargs):
-        # Automatically calculate total price for the item
         self.total_price = self.quantity * self.unit_price
         super().save(*args, **kwargs)
 
     def __str__(self):
         return self.description
+
 
 @receiver(post_save, sender=InvoiceItem)
 def update_invoice_totals(sender, instance, **kwargs):
@@ -251,19 +278,81 @@ def update_invoice_totals(sender, instance, **kwargs):
     invoice.calculate_totals()
     invoice.save()
 
+
 class ScannedInvoice(models.Model):
     invoice = models.ForeignKey(Invoice, on_delete=models.CASCADE)
-    scanned_file = models.FileField(upload_to='management/templates/management/scanned_invoices/')
+    scanned_file = models.FileField(upload_to= 'scanned_invoices/')
     date_uploaded = models.DateTimeField(auto_now_add=True)
 
     def __str__(self):
         return f"Scanned Invoice for {self.invoice.invoice_number}"
-class Receipt(models.Model):
-    receipt_number = models.CharField(max_length=20, unique=True)
-    invoice = models.ForeignKey(Invoice, on_delete=models.CASCADE)
-    amount_paid = models.DecimalField(max_digits=10, decimal_places=2)
-    date_created = models.DateField(auto_now_add=True)
-    description = models.CharField(max_length=255)
+
+
+# this model class is for both invoice and quotation
+class Footnote(models.Model):
+    quotation_text = models.TextField(
+        default="Above information is not an invoice and only an estimate of services/goods described above. "
+                "Payment will be collected in prior to provision of services/goods described in this quote. "
+                "Please confirm your acceptance of this quote by signing this document.\n\n"
+                "Signature       Print Name       Date\n\n"
+                "Thank you for your business!\n"
+                "Should you have any enquiries concerning this quote, please contact:\n"
+                "Ken 0731 011 954 | Humphrey 0715 679 643"
+    )
+    invoice_text = models.TextField(
+        default="PAYMENT DETAILS:\n"
+                "PAYBILL: 522522\n"
+                "ACCOUNT: 5808345\n"
+                "----------------------------------\n"
+                "KCB BANK\n"
+                "ACCOUNT: 1295384434\n\n"
+                "Please confirm your Receipt of this Invoice by signing this document.\n\n"
+                "Signature               Print Name                                      Date\n\n"
+                "Thank you for your business!\n"
+                "Should you have any enquiries concerning this Invoice, please contact:\n"
+                "Ken 0707 475 681 | Humphrey 0715 679 643"
+    )
 
     def __str__(self):
-        return self.receipt_number
+        return "Footnotes for Quotations and Invoices"
+
+# Receipt Model begins here
+class Receipt(models.Model):
+    PAYMENT_METHOD_CHOICES = [
+        ('Cash', 'Cash'),
+        ('Bank Transfer', 'Bank Transfer'),
+        ('Cheque', 'Cheque'),
+        ('Mobile Money', 'Mobile Money'),
+        ('Other', 'Other'),
+    ]
+
+    receipt_number = models.CharField(max_length=20, unique=True, blank=True)
+    invoice = models.ForeignKey(Invoice, on_delete=models.CASCADE, related_name='receipts')
+    payment_date = models.DateField(default=timezone.now)
+    amount_paid = models.DecimalField(max_digits=10, decimal_places=2)
+    payment_method = models.CharField(max_length=50, choices=PAYMENT_METHOD_CHOICES, blank=True, null=True)
+    notes = models.TextField(blank=True, null=True)
+
+    def clean(self):
+        outstanding_balance = self.invoice.calculate_outstanding_balance()
+        if self.amount_paid > outstanding_balance:
+            raise ValueError(f"Amount paid cannot exceed the outstanding balance of {outstanding_balance}.")
+        if self.amount_paid <= Decimal('0.00'):
+            raise ValueError("Amount paid must be greater than zero.")
+
+    def save(self, *args, **kwargs):
+        if not self.receipt_number:
+            self.receipt_number = self.generate_unique_receipt_number()
+        self.clean()
+        super().save(*args, **kwargs)
+        self.invoice.update_payment_status(save_instance=True)
+
+    def generate_unique_receipt_number(self):
+        current_year = timezone.now().year
+        last_receipt = Receipt.objects.filter(receipt_number__startswith=f"RCT-{current_year}-").last()
+        new_sequence_number = 1 if not last_receipt else int(last_receipt.receipt_number.split('-')[-1]) + 1
+        return f"RCT-{current_year}-{new_sequence_number:03d}"
+
+    def __str__(self):
+        return f"Receipt {self.receipt_number} for Invoice {self.invoice.invoice_number} - {self.amount_paid} paid on {self.payment_date}"
+

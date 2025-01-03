@@ -1,0 +1,36 @@
+BUSINESS_MANAGEMENT_APP/
+│__.pytest_cache
+├── business_management_app/
+│   ├── _pycache_/
+│   │__ _init_.py  
+│   │__ asgi.py  
+│   │___ settings.py  
+│   ├── urls.py
+│   └── wsgi.py
+│
+├── management/
+|   |___ _pycache_
+|   |____ migrations/
+│   ├── templates/management
+│   │   ├── scanned_invoices
+│   │   └── create_quotation.html
+|   |   |___ ...
+│   ├── _init_.py
+│   │── admin.py
+│   │── app.py
+│   └── forms.py
+|   |___ models.py
+|   |___ tests.py
+|   |___ urls.py
+|   |___ views.py
+│
+|__ media/
+|   |__ scanned_invoices
+|   |
+|
+|
+├── templates/
+├── venv
+├── .gitignore
+├── pytest.ini
+└── ...
