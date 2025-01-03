@@ -4,7 +4,11 @@ from django.urls import reverse_lazy
 from django.db.models import Q
 from django.views.generic import CreateView, UpdateView, DetailView, DeleteView, ListView
 from .forms import QuotationForm, QuotationItemFormSet, InvoiceForm, InvoiceItemFormSet
-from .models import Quotation, QuotationItem, Invoice, InvoiceItem
+from .models import Quotation, QuotationItem, Invoice, InvoiceItem, Receipt
+from django.http import JsonResponse
+from django.views.decorators.csrf import csrf_exempt
+import json
+from decimal import Decimal, ROUND_HALF_UP
 
 def create_quotation(request, quotation_id=None):
     if quotation_id:
@@ -156,3 +160,51 @@ class InvoiceListView(ListView):
             queryset = queryset.filter(date_created__range=[start_date, end_date])
 
         return queryset
+    
+@csrf_exempt
+def create_receipt_view(request, invoice_id):
+    if request.method == 'POST':
+        try:
+            data = json.loads(request.body)
+            amount_paid = Decimal(data.get('amount_paid'))
+            payment_description = data.get('payment_description', '')
+            payment_date = data.get('payment_date')
+
+            if amount_paid <= 0:
+                return JsonResponse({'error': 'Amount paid must be greater than zero.'}, status=400)
+
+            invoice = get_object_or_404(Invoice, id=invoice_id)
+
+            if amount_paid > invoice.outstanding_balance:
+                return JsonResponse({'error': 'Amount exceeds outstanding balance.'}, status=400)
+
+            # Create receipt
+            receipt = Receipt.objects.create(
+                invoice=invoice,
+                amount_paid=amount_paid,
+                payment_description=payment_description,
+                payment_date=payment_date
+            )
+
+            # Update invoice status
+            invoice.update_balance_and_status()
+
+            return JsonResponse({'message': 'Receipt created successfully.', 'receipt_number': receipt.receipt_number})
+        except Exception as e:
+            return JsonResponse({'error': str(e)}, status=400)
+    return JsonResponse({'error': 'Invalid HTTP method.'}, status=405)
+
+
+def list_receipts_view(request, invoice_id):
+    invoice = get_object_or_404(Invoice, id=invoice_id)
+    receipts = invoice.receipts.all().order_by('-payment_date')
+    receipt_data = [
+        {
+            'receipt_number': receipt.receipt_number,
+            'amount_paid': receipt.amount_paid,
+            'payment_date': receipt.payment_date,
+            'payment_description': receipt.payment_description
+        }
+        for receipt in receipts
+    ]
+    return JsonResponse({'receipts': receipt_data})

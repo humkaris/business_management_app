@@ -2,6 +2,8 @@ from django.urls import path
 from .views import (
     InvoiceCreateView, InvoiceUpdateView, InvoiceDetailView,
     InvoiceDeleteView, InvoiceListView, create_quotation, quotation_list, edit_quotation )
+from django.conf import settings
+from django.conf.urls.static import static
 
 urlpatterns = [
     path('create/', create_quotation, name='create_quotation'),  # Route for creating a quotation
@@ -15,3 +17,6 @@ urlpatterns = [
     path('invoices/<int:pk>/delete/', InvoiceDeleteView.as_view(), name='invoice_delete'),
     
 ]
+
+if settings.DEBUG:
+    urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
