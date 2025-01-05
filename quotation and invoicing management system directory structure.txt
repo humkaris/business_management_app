@@ -10,7 +10,14 @@ BUSINESS_MANAGEMENT_APP/
 │
 ├── management/
 |   |___ _pycache_
-|   |____ migrations/
+|   |___ migrations/
+|   |___ services/
+|   |    |__ _init_.py
+|   |    |__ invoice_service.py
+|   |    |__ notification_service.py
+|   |    |__ payment_service.py
+|   |    |__ quotation_service.py
+|   |    |__ report_service.py
 │   ├── templates/management
 │   │   ├── scanned_invoices
 │   │   └── create_quotation.html
@@ -24,11 +31,6 @@ BUSINESS_MANAGEMENT_APP/
 |   |___ urls.py
 |   |___ views.py
 │
-|__ media/
-|   |__ scanned_invoices
-|   |
-|
-|
 ├── templates/
 ├── venv
 ├── .gitignore
